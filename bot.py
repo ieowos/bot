@@ -44,9 +44,16 @@ dp = Dispatcher(bot, storage=storage)
 # ─── Константы ───────────────────────────────────────────────────────────────
 
 PRICES = {
-    "finland":     25,
-    "germany":     35,
-    "netherlands": 40,
+    "finland":     35,
+    "germany":     40,
+    "netherlands": 25,
+}
+
+# Цены в звёздах (фиксированные, не пересчитываются по курсу)
+STAR_PRICES = {
+    "finland":     20,
+    "germany":     25,
+    "netherlands": 15,
 }
 
 COUNTRY_NAMES = {
@@ -126,7 +133,8 @@ async def show_proxies(message: types.Message):
     balance = await get_balance(message.from_user.id)
     text = "🛒 <b>Доступные прокси:</b>\n\n"
     for country, price in PRICES.items():
-        text += f"{COUNTRY_NAMES[country]} — {price} руб.\n"
+        stars = STAR_PRICES[country]
+        text += f"{COUNTRY_NAMES[country]} — {price} руб. / {stars} ⭐\n"
     text += f"\n💰 Ваш баланс: {balance} руб."
     kb = InlineKeyboardMarkup(row_width=1)
     for country in PRICES:
@@ -349,7 +357,7 @@ async def agreement_menu(message: types.Message):
 async def show_buy_options(call: types.CallbackQuery, country: str):
     user_id = call.from_user.id
     price_rub = PRICES[country]
-    price_stars = math.ceil(price_rub / 1.5)
+    price_stars = STAR_PRICES[country]  # ← исправлено: фиксированная цена в звёздах
     balance = await get_balance(user_id)
     kb = InlineKeyboardMarkup(row_width=1)
     kb.add(InlineKeyboardButton(f"⭐ Купить за {price_stars} звёзд", callback_data=f"buy_stars_{country}"))
@@ -379,7 +387,7 @@ async def process_buy_callback(call: types.CallbackQuery):
 @dp.callback_query_handler(lambda c: c.data.startswith("buy_stars_"))
 async def buy_proxy_stars(call: types.CallbackQuery):
     country = call.data.split("_")[2]
-    price_stars = math.ceil(PRICES[country] / 1.5)
+    price_stars = STAR_PRICES[country]  # ← исправлено: фиксированная цена
     await bot.send_invoice(
         call.from_user.id,
         title=f"Прокси {COUNTRY_NAMES[country]}",
@@ -436,7 +444,8 @@ async def back_to_proxies(call: types.CallbackQuery):
     balance = await get_balance(user_id)
     text = "🛒 <b>Доступные прокси:</b>\n\n"
     for country, price in PRICES.items():
-        text += f"{COUNTRY_NAMES[country]} — {price} руб.\n"
+        stars = STAR_PRICES[country]
+        text += f"{COUNTRY_NAMES[country]} — {price} руб. / {stars} ⭐\n"
     text += f"\n💰 Ваш баланс: {balance} руб."
     kb = InlineKeyboardMarkup(row_width=1)
     for country in PRICES:
