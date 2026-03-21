@@ -1,5 +1,7 @@
 import asyncpg
 import os
+import hashlib
+import time
 from typing import Optional
 
 DATABASE_URL = os.getenv('DATABASE_URL')
@@ -9,10 +11,12 @@ async def get_connection():
         raise ValueError("DATABASE_URL не задан")
     return await asyncpg.connect(DATABASE_URL)
 
+def generate_ref_code(user_id: int) -> str:
+    return hashlib.md5(f"{user_id}{time.time()}".encode()).hexdigest()[:8].upper()
+
 async def init_db():
     conn = await get_connection()
     try:
-        # Основная таблица пользователей
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 user_id BIGINT PRIMARY KEY,
@@ -23,7 +27,6 @@ async def init_db():
                 created_at TIMESTAMP DEFAULT NOW()
             )
         ''')
-        # Добавляем колонки если их нет (для старых БД)
         for col, definition in [
             ("referral_code", "TEXT UNIQUE"),
             ("referred_by",   "BIGINT DEFAULT NULL"),
@@ -34,7 +37,6 @@ async def init_db():
             except Exception:
                 pass
 
-        # Таблица истории покупок
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS purchases (
                 id SERIAL PRIMARY KEY,
@@ -45,20 +47,62 @@ async def init_db():
                 purchased_at TIMESTAMP DEFAULT NOW()
             )
         ''')
-        print("✅ БД готова")
+
+        # Генерируем реферальные коды для всех у кого их нет
+        users_without_code = await conn.fetch(
+            'SELECT user_id FROM users WHERE referral_code IS NULL'
+        )
+        for row in users_without_code:
+            uid = row['user_id']
+            code = generate_ref_code(uid)
+            try:
+                await conn.execute(
+                    'UPDATE users SET referral_code = $1 WHERE user_id = $2',
+                    code, uid
+                )
+            except Exception:
+                pass
+
+        print(f"✅ БД готова, обновлено кодов: {len(users_without_code)}")
     finally:
         await conn.close()
 
 async def create_user(user_id: int, referred_by: int = None):
     conn = await get_connection()
     try:
-        import hashlib, time
-        ref_code = hashlib.md5(f"{user_id}{time.time()}".encode()).hexdigest()[:8].upper()
+        code = generate_ref_code(user_id)
         await conn.execute('''
             INSERT INTO users (user_id, referral_code, referred_by)
             VALUES ($1, $2, $3)
             ON CONFLICT (user_id) DO NOTHING
-        ''', user_id, ref_code, referred_by)
+        ''', user_id, code, referred_by)
+    finally:
+        await conn.close()
+
+async def ensure_ref_code(user_id: int) -> str:
+    """Возвращает реферальный код, создаёт если нет."""
+    conn = await get_connection()
+    try:
+        row = await conn.fetchrow(
+            'SELECT referral_code FROM users WHERE user_id = $1', user_id
+        )
+        if row and row['referral_code']:
+            return row['referral_code']
+        # Генерируем и сохраняем
+        code = generate_ref_code(user_id)
+        try:
+            await conn.execute(
+                'UPDATE users SET referral_code = $1 WHERE user_id = $2',
+                code, user_id
+            )
+        except Exception:
+            # Коллизия — генерируем новый
+            code = generate_ref_code(user_id + 1)
+            await conn.execute(
+                'UPDATE users SET referral_code = $1 WHERE user_id = $2',
+                code, user_id
+            )
+        return code
     finally:
         await conn.close()
 
@@ -131,7 +175,6 @@ async def get_user_by_ref_code(ref_code: str) -> Optional[dict]:
         await conn.close()
 
 async def is_referred(user_id: int) -> bool:
-    """Проверяет был ли пользователь уже кем-то приглашён."""
     conn = await get_connection()
     try:
         row = await conn.fetchrow('SELECT referred_by FROM users WHERE user_id = $1', user_id)
@@ -140,7 +183,6 @@ async def is_referred(user_id: int) -> bool:
         await conn.close()
 
 async def add_purchase(user_id: int, product: str, amount_rub: int, paid_with: str):
-    """Записывает покупку в историю."""
     conn = await get_connection()
     try:
         await conn.execute('''
@@ -163,8 +205,6 @@ async def get_purchase_history(user_id: int, limit: int = 10) -> list:
         return [dict(r) for r in rows]
     finally:
         await conn.close()
-
-# ─── Статистика для админа ────────────────────────────────────────────────────
 
 async def get_stats() -> dict:
     conn = await get_connection()
