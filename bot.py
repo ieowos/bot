@@ -26,8 +26,10 @@ from env import (
 )
 
 from database import (
-    create_user, get_balance, add_balance,
-    subtract_balance, set_country, get_country, init_db
+    create_user, get_user, get_balance, add_balance,
+    subtract_balance, set_country, get_country, init_db,
+    get_user_by_ref_code, is_referred, add_purchase,
+    get_purchase_history, get_stats, get_top_users, get_all_user_ids,
 )
 
 from roulette import (
@@ -41,6 +43,9 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN, parse_mode="HTML")
 storage = MemoryStorage()
 dp = Dispatcher(bot, storage=storage)
+
+REFERRAL_BONUS = 20
+CHANNEL_ID = "@getTelegramm"  # канал для проверки подписки
 
 # ─── Константы ───────────────────────────────────────────────────────────────
 
@@ -99,6 +104,20 @@ class DepositState(StatesGroup):
     waiting_amount     = State()
     waiting_screenshot = State()
 
+class BroadcastState(StatesGroup):
+    waiting_message = State()
+
+# ─── Проверка подписки на канал ──────────────────────────────────────────────
+
+async def is_subscribed(user_id: int) -> bool:
+    """Проверяет подписан ли пользователь на CHANNEL_ID."""
+    try:
+        member = await bot.get_chat_member(CHANNEL_ID, user_id)
+        return member.status in ("member", "administrator", "creator")
+    except Exception as e:
+        print(f"Ошибка проверки подписки: {e}")
+        return False
+
 # ─── Клавиатуры ──────────────────────────────────────────────────────────────
 
 def get_main_keyboard():
@@ -118,11 +137,56 @@ def cancel_keyboard():
     kb.add(InlineKeyboardButton("❌ Отмена", callback_data="cancel_deposit"))
     return kb
 
-# ─── /start ──────────────────────────────────────────────────────────────────
+def subscribe_keyboard(referrer_id: int) -> InlineKeyboardMarkup:
+    """Кнопки для нового реферала — подписаться и проверить."""
+    kb = InlineKeyboardMarkup(row_width=1)
+    kb.add(InlineKeyboardButton("📢 Подписаться на канал", url=CHANNEL_URL))
+    kb.add(InlineKeyboardButton("✅ Я подписался", callback_data=f"check_sub_{referrer_id}"))
+    return kb
+
+# ─── /start с поддержкой реферального кода ───────────────────────────────────
 
 @dp.message_handler(commands=["start"])
 async def start(message: types.Message):
-    await create_user(message.from_user.id)
+    user_id = message.from_user.id
+    args = message.get_args()
+
+    referrer_id = None
+
+    if args and args.startswith("ref_"):
+        ref_code = args[4:]
+        already_referred = await is_referred(user_id)
+
+        if not already_referred:
+            referrer = await get_user_by_ref_code(ref_code)
+            if referrer and referrer['user_id'] != user_id:
+                referrer_id = referrer['user_id']
+
+    await create_user(user_id, referred_by=referrer_id)
+
+    # Если пришёл по реферальной ссылке — просим подписаться на канал
+    if referrer_id:
+        subscribed = await is_subscribed(user_id)
+        if subscribed:
+            # Уже подписан — сразу выдаём бонус рефереру
+            await give_referral_bonus(referrer_id, user_id)
+        else:
+            # Просим подписаться
+            await message.answer(
+                f"👋 Привет, {message.from_user.first_name}!\n\n"
+                f"Вы перешли по реферальной ссылке.\n\n"
+                f"📢 Чтобы ваш друг получил бонус <b>{REFERRAL_BONUS} ₽</b>, "
+                f"подпишитесь на наш канал:",
+                reply_markup=subscribe_keyboard(referrer_id)
+            )
+            # Даём доступ к боту независимо от подписки
+            await message.answer(
+                "Добро пожаловать в магазин прокси!\n"
+                "Выберите действие в меню ниже:",
+                reply_markup=get_main_keyboard()
+            )
+            return
+
     await message.answer(
         f"👋 Привет, {message.from_user.first_name}!\n\n"
         f"Добро пожаловать в магазин прокси.\n"
@@ -130,22 +194,58 @@ async def start(message: types.Message):
         reply_markup=get_main_keyboard()
     )
 
+async def give_referral_bonus(referrer_id: int, new_user_id: int):
+    """Начисляет бонус рефереру."""
+    await add_balance(referrer_id, REFERRAL_BONUS)
+    try:
+        await bot.send_message(
+            referrer_id,
+            f"🎉 Ваш друг подписался на канал и зарегистрировался!\n\n"
+            f"💰 Вам начислено <b>{REFERRAL_BONUS} ₽</b> на баланс."
+        )
+    except Exception:
+        pass
+    print(f"✅ Реферальный бонус {REFERRAL_BONUS} ₽ начислен {referrer_id} за {new_user_id}")
+
+# ─── Callback: проверка подписки после нажатия "Я подписался" ────────────────
+
+@dp.callback_query_handler(lambda c: c.data.startswith("check_sub_"))
+async def check_subscription(call: types.CallbackQuery):
+    user_id = call.from_user.id
+    referrer_id = int(call.data.split("_")[2])
+
+    subscribed = await is_subscribed(user_id)
+
+    if subscribed:
+        # Проверяем что бонус ещё не был выдан
+        user = await get_user(referrer_id)
+        already_referred = await is_referred(user_id)
+
+        # Выдаём бонус только если реферал действительно записан к этому рефереру
+        user_data = await get_user(user_id)
+        if user_data and user_data.get('referred_by') == referrer_id:
+            await give_referral_bonus(referrer_id, user_id)
+            await call.message.edit_reply_markup()  # убираем кнопки
+            await call.answer("✅ Спасибо за подписку! Ваш друг получил бонус.", show_alert=True)
+        else:
+            await call.answer("✅ Подписка подтверждена!", show_alert=True)
+    else:
+        await call.answer(
+            "❌ Вы ещё не подписались на канал!\n\n"
+            "Подпишитесь и нажмите кнопку снова.",
+            show_alert=True
+        )
+
 # ─── Купить прокси ────────────────────────────────────────────────────────────
 
 @dp.message_handler(lambda m: m.text == "🛒 Купить прокси")
 async def show_proxies(message: types.Message):
     balance = await get_balance(message.from_user.id)
-
     text = "🛒 <b>Доступные прокси:</b>\n\n"
     for country in PRICES_RUB:
-        if country == "germany_socks5":
-            text += f"{COUNTRY_NAMES[country]} — {PRICES_RUB[country]} руб. / {PRICES_STARS[country]} ⭐\n"
-        else:
-            text += f"{COUNTRY_NAMES[country]} — {PRICES_RUB[country]} руб. / {PRICES_STARS[country]} ⭐\n"
-
+        text += f"{COUNTRY_NAMES[country]} — {PRICES_RUB[country]} руб. / {PRICES_STARS[country]} ⭐\n"
     text += f"\n⚡ <i>SOCKS5 обходит ВСЕ сервисы</i>"
     text += f"\n\n💰 Ваш баланс: {balance} руб."
-
     kb = InlineKeyboardMarkup(row_width=1)
     for country in PRICES_RUB:
         kb.add(InlineKeyboardButton(
@@ -154,7 +254,7 @@ async def show_proxies(message: types.Message):
         ))
     await message.answer(text, reply_markup=kb)
 
-# ─── Пополнить баланс — шаг 1 ────────────────────────────────────────────────
+# ─── Пополнить баланс ─────────────────────────────────────────────────────────
 
 @dp.message_handler(lambda m: m.text == "💰 Пополнить баланс")
 async def deposit_step1(message: types.Message):
@@ -198,8 +298,6 @@ async def deposit_step2(message: types.Message, state: FSMContext):
         reply_markup=kb
     )
 
-# ─── Пополнить баланс — шаг 2: скриншот ──────────────────────────────────────
-
 @dp.message_handler(state=DepositState.waiting_screenshot, content_types=types.ContentType.PHOTO)
 async def deposit_got_screenshot(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
@@ -227,12 +325,8 @@ async def deposit_got_screenshot(message: types.Message, state: FSMContext):
         f"📸 Скриншот:"
     )
     await bot.forward_message(ADMIN_ID, user_id, message.message_id)
-
     kb = InlineKeyboardMarkup()
-    kb.add(InlineKeyboardButton(
-        "❌ Отменить зачисление",
-        callback_data=f"refund_{user_id}_{amount}"
-    ))
+    kb.add(InlineKeyboardButton("❌ Отменить зачисление", callback_data=f"refund_{user_id}_{amount}"))
     await bot.send_message(ADMIN_ID, "Если чек фейковый — нажми:", reply_markup=kb)
 
 @dp.message_handler(state=DepositState.waiting_screenshot, content_types=types.ContentType.ANY)
@@ -255,44 +349,19 @@ async def admin_refund(call: types.CallbackQuery):
     await subtract_balance(user_id, amount)
     new_balance = await get_balance(user_id)
     await call.message.edit_text(
-        f"✅ Зачисление отменено.\n"
-        f"User: <code>{user_id}</code>\n"
-        f"Списано: <b>{amount} ₽</b>\n"
-        f"Остаток: <b>{new_balance} ₽</b>"
+        f"✅ Зачисление отменено.\nUser: <code>{user_id}</code>\n"
+        f"Списано: <b>{amount} ₽</b> | Остаток: <b>{new_balance} ₽</b>"
     )
     try:
         await bot.send_message(
             user_id,
-            f"❌ Ваш чек не прошёл проверку.\n\n"
+            f"❌ Ваш чек не прошёл проверку.\n"
             f"Пополнение на {amount} ₽ отменено.\n"
-            f"Если это ошибка — обратитесь к @{SUPPORT_USERNAME}"
+            f"Если ошибка — обратитесь к @{SUPPORT_USERNAME}"
         )
     except Exception:
         pass
     await call.answer("Зачисление отменено")
-
-# ─── /add (только для админа) ────────────────────────────────────────────────
-
-@dp.message_handler(commands=["add"])
-async def admin_add_balance(message: types.Message):
-    if str(message.from_user.id) != str(ADMIN_ID):
-        return
-    parts = message.text.split()
-    if len(parts) != 3 or not parts[1].isdigit() or not parts[2].isdigit():
-        await message.answer("Использование: /add USER_ID СУММА")
-        return
-    user_id = int(parts[1])
-    amount = int(parts[2])
-    await add_balance(user_id, amount)
-    new_balance = await get_balance(user_id)
-    await message.answer(f"✅ Пополнено {amount} ₽\nUser: {user_id}\nБаланс: {new_balance} ₽")
-    try:
-        await bot.send_message(
-            user_id,
-            f"✅ Баланс пополнен!\n\n💰 Зачислено: <b>{amount} ₽</b>\n💳 Баланс: <b>{new_balance} ₽</b>"
-        )
-    except Exception:
-        pass
 
 # ─── 🎰 Рулетка ───────────────────────────────────────────────────────────────
 
@@ -324,18 +393,42 @@ async def support_menu(message: types.Message):
         kb.add(InlineKeyboardButton("📢 Канал", url=CHANNEL_URL))
     await message.answer(f"📞 Поддержка: @{SUPPORT_USERNAME}", reply_markup=kb)
 
-# ─── Профиль ──────────────────────────────────────────────────────────────────
+# ─── Профиль ─────────────────────────────────────────────────────────────────
 
 @dp.message_handler(lambda m: m.text == "👤 Профиль")
 async def profile_menu(message: types.Message):
     user_id = message.from_user.id
-    balance = await get_balance(user_id)
-    country = await get_country(user_id)
-    text = f"👤 <b>Ваш профиль:</b>\n\n💰 Баланс: {balance} руб.\n"
+    user = await get_user(user_id)
+    balance = user['balance'] if user else 0
+    country = user['country'] if user else None
+    ref_code = user['referral_code'] if user else None
+
+    bot_info = await bot.get_me()
+    ref_link = f"https://t.me/{bot_info.username}?start=ref_{ref_code}" if ref_code else "недоступна"
+
+    text = f"👤 <b>Ваш профиль:</b>\n\n"
+    text += f"💰 Баланс: <b>{balance} руб.</b>\n"
+
     if country:
-        text += f"📡 Прокси: ✅ {COUNTRY_NAMES.get(country, country)}\n🔗 Ссылка: {PROXY_LINKS.get(country, '')}"
+        text += f"📡 Прокси: ✅ {COUNTRY_NAMES.get(country, country)}\n"
+        text += f"🔗 Ссылка: {PROXY_LINKS.get(country, '')}\n"
     else:
-        text += "📡 Прокси: ❌ Нет активного прокси"
+        text += f"📡 Прокси: ❌ Нет активного прокси\n"
+
+    text += (
+        f"\n👥 <b>Реферальная ссылка:</b>\n{ref_link}\n"
+        f"<i>За каждого друга, подписавшегося на канал +{REFERRAL_BONUS} ₽</i>\n"
+    )
+
+    history = await get_purchase_history(user_id, limit=5)
+    if history:
+        text += f"\n📋 <b>Последние покупки:</b>\n"
+        for p in history:
+            date = p['purchased_at'].strftime("%d.%m.%y")
+            text += f"• {p['product']} — {p['amount_rub']} ₽ [{date}]\n"
+    else:
+        text += f"\n📋 <b>Покупок пока нет</b>"
+
     await message.answer(text, disable_web_page_preview=True)
 
 # ─── Соглашение ───────────────────────────────────────────────────────────────
@@ -353,28 +446,14 @@ async def show_buy_options(call: types.CallbackQuery, country: str):
     price_rub = PRICES_RUB[country]
     price_stars = PRICES_STARS[country]
     balance = await get_balance(user_id)
-
     kb = InlineKeyboardMarkup(row_width=1)
-    kb.add(InlineKeyboardButton(
-        f"⭐ Купить за {price_stars} звёзд",
-        callback_data=f"buy_stars_{country}"
-    ))
+    kb.add(InlineKeyboardButton(f"⭐ Купить за {price_stars} звёзд", callback_data=f"buy_stars_{country}"))
     if balance >= price_rub:
-        kb.add(InlineKeyboardButton(
-            f"💰 С баланса ({price_rub} руб.)",
-            callback_data=f"buy_balance_{country}"
-        ))
+        kb.add(InlineKeyboardButton(f"💰 С баланса ({price_rub} руб.)", callback_data=f"buy_balance_{country}"))
     else:
-        kb.add(InlineKeyboardButton(
-            f"❌ Недостаточно средств ({balance} руб.)",
-            callback_data="no_money"
-        ))
+        kb.add(InlineKeyboardButton(f"❌ Недостаточно средств ({balance} руб.)", callback_data="no_money"))
     kb.add(InlineKeyboardButton("◀ Назад", callback_data="back_to_proxies"))
-
-    extra = ""
-    if country == "germany_socks5":
-        extra = "\n⚡ <i>Обходит ВСЕ сервисы</i>"
-
+    extra = "\n⚡ <i>Обходит ВСЕ сервисы</i>" if country == "germany_socks5" else ""
     await bot.send_message(
         user_id,
         f"{COUNTRY_NAMES[country]}{extra}\n\n"
@@ -390,7 +469,6 @@ async def show_buy_options(call: types.CallbackQuery, country: str):
     and not c.data.startswith("buy_balance_")
 )
 async def process_buy_callback(call: types.CallbackQuery):
-    # Достаём ключ страны — может быть "germany_socks5" (два слова через _)
     country = "_".join(call.data.split("_")[1:])
     await show_buy_options(call, country)
     await call.answer()
@@ -419,6 +497,7 @@ async def buy_proxy_balance(call: types.CallbackQuery):
     if await subtract_balance(user_id, price_rub):
         await set_country(user_id, country)
         new_balance = await get_balance(user_id)
+        await add_purchase(user_id, COUNTRY_NAMES[country], price_rub, "balance")
         kb = InlineKeyboardMarkup()
         if CHANNEL_URL:
             kb.add(InlineKeyboardButton("📢 Канал", url=CHANNEL_URL))
@@ -440,10 +519,7 @@ async def buy_proxy_balance(call: types.CallbackQuery):
 
 @dp.callback_query_handler(lambda c: c.data == "no_money")
 async def no_money(call: types.CallbackQuery):
-    await bot.send_message(
-        call.from_user.id,
-        "❌ Пополните баланс через кнопку «💰 Пополнить баланс»."
-    )
+    await bot.send_message(call.from_user.id, "❌ Пополните баланс через кнопку «💰 Пополнить баланс».")
     await call.answer()
 
 @dp.callback_query_handler(lambda c: c.data == "back_to_proxies")
@@ -492,6 +568,7 @@ async def successful_payment(message: types.Message):
         else:
             country = PRIZE_TO_COUNTRY[prize["id"]]
             await set_country(user_id, country)
+            await add_purchase(user_id, COUNTRY_NAMES[country] + " (рулетка)", 0, "stars")
             result_extra = f"✅ Прокси активирован!\n🔗 {PROXY_LINKS[country]}"
             await bot.send_message(
                 ADMIN_ID,
@@ -508,11 +585,11 @@ async def successful_payment(message: types.Message):
         return
 
     if payload.startswith("proxy_"):
-        # payload формат: proxy_germany_socks5_80 или proxy_finland_35
         parts = payload.split("_")
-        # Последний элемент — цена, остальное после "proxy" — ключ страны
         country = "_".join(parts[1:-1])
+        price_rub = PRICES_RUB.get(country, 0)
         await set_country(user_id, country)
+        await add_purchase(user_id, COUNTRY_NAMES.get(country, country), price_rub, "stars")
         kb = InlineKeyboardMarkup()
         if CHANNEL_URL:
             kb.add(InlineKeyboardButton("📢 Канал", url=CHANNEL_URL))
@@ -523,12 +600,99 @@ async def successful_payment(message: types.Message):
             reply_markup=kb, disable_web_page_preview=True
         )
 
+# ─── Админ команды ────────────────────────────────────────────────────────────
+
+@dp.message_handler(commands=["add"])
+async def admin_add_balance(message: types.Message):
+    if str(message.from_user.id) != str(ADMIN_ID):
+        return
+    parts = message.text.split()
+    if len(parts) != 3 or not parts[1].isdigit() or not parts[2].isdigit():
+        await message.answer("Использование: /add USER_ID СУММА")
+        return
+    user_id = int(parts[1])
+    amount = int(parts[2])
+    await add_balance(user_id, amount)
+    new_balance = await get_balance(user_id)
+    await message.answer(f"✅ Пополнено {amount} ₽\nUser: {user_id}\nБаланс: {new_balance} ₽")
+    try:
+        await bot.send_message(user_id, f"✅ Баланс пополнен!\n\n💰 Зачислено: <b>{amount} ₽</b>\n💳 Баланс: <b>{new_balance} ₽</b>")
+    except Exception:
+        pass
+
+@dp.message_handler(commands=["stats"])
+async def admin_stats(message: types.Message):
+    if str(message.from_user.id) != str(ADMIN_ID):
+        return
+    stats = await get_stats()
+    await message.answer(
+        f"📊 <b>Статистика GetTG</b>\n\n"
+        f"👥 Всего пользователей: <b>{stats['total_users']}</b>\n"
+        f"🆕 Новых сегодня: <b>{stats['new_today']}</b>\n\n"
+        f"🛒 Всего покупок: <b>{stats['total_purchases']}</b>\n"
+        f"💰 Выручка (с баланса): <b>{stats['total_revenue']} ₽</b>\n"
+        f"⭐ Покупок за Stars: <b>{stats['total_stars_purchases']}</b>\n\n"
+        f"🏆 Топ товар: <b>{stats['top_product']}</b>"
+    )
+
+@dp.message_handler(commands=["users"])
+async def admin_users(message: types.Message):
+    if str(message.from_user.id) != str(ADMIN_ID):
+        return
+    top = await get_top_users(10)
+    if not top:
+        await message.answer("Нет данных.")
+        return
+    text = "🏆 <b>Топ пользователей по покупкам:</b>\n\n"
+    for i, u in enumerate(top, 1):
+        text += (
+            f"{i}. <code>{u['user_id']}</code>\n"
+            f"   💰 Баланс: {u['balance']} ₽ | "
+            f"Покупок: {u['purchases_count']} | "
+            f"Потрачено: {u['total_spent']} ₽\n\n"
+        )
+    await message.answer(text)
+
+@dp.message_handler(commands=["broadcast"])
+async def admin_broadcast_start(message: types.Message, state: FSMContext):
+    if str(message.from_user.id) != str(ADMIN_ID):
+        return
+    text_after = message.text.partition(" ")[2].strip()
+    if text_after:
+        await do_broadcast(message, text_after)
+    else:
+        await message.answer("Введите текст для рассылки:")
+        await BroadcastState.waiting_message.set()
+
+@dp.message_handler(state=BroadcastState.waiting_message)
+async def admin_broadcast_send(message: types.Message, state: FSMContext):
+    await state.finish()
+    await do_broadcast(message, message.text)
+
+async def do_broadcast(message: types.Message, text: str):
+    user_ids = await get_all_user_ids()
+    sent = 0
+    failed = 0
+    status_msg = await message.answer(f"📤 Рассылаем {len(user_ids)} пользователям...")
+    for uid in user_ids:
+        try:
+            await bot.send_message(uid, text)
+            sent += 1
+        except Exception:
+            failed += 1
+        await asyncio.sleep(0.05)
+    await status_msg.edit_text(
+        f"✅ Рассылка завершена!\n\n"
+        f"📨 Отправлено: <b>{sent}</b>\n"
+        f"❌ Не доставлено: <b>{failed}</b>"
+    )
+
 # ─── Запуск ───────────────────────────────────────────────────────────────────
 
 async def on_startup(dp):
     print("🔄 Инициализация БД...")
     await init_db()
-    print("✅ Бот готов к работе")
+    print(f"✅ Бот готов | Канал для рефералов: {CHANNEL_ID}")
 
 if __name__ == "__main__":
     print("=" * 50)
