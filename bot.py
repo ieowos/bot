@@ -28,8 +28,9 @@ from env import (
 from database import (
     create_user, get_user, get_balance, add_balance,
     subtract_balance, set_country, get_country, init_db,
-    get_user_by_ref_code, is_referred, add_purchase,
-    get_purchase_history, get_stats, get_top_users, get_all_user_ids,
+    get_user_by_ref_code, is_referred, ensure_ref_code,
+    add_purchase, get_purchase_history,
+    get_stats, get_top_users, get_all_user_ids,
 )
 
 from roulette import (
@@ -45,7 +46,7 @@ storage = MemoryStorage()
 dp = Dispatcher(bot, storage=storage)
 
 REFERRAL_BONUS = 20
-CHANNEL_ID = "@getTelegramm"  # канал для проверки подписки
+CHANNEL_ID = "@getTelegramm"
 
 # ─── Константы ───────────────────────────────────────────────────────────────
 
@@ -107,10 +108,9 @@ class DepositState(StatesGroup):
 class BroadcastState(StatesGroup):
     waiting_message = State()
 
-# ─── Проверка подписки на канал ──────────────────────────────────────────────
+# ─── Проверка подписки ────────────────────────────────────────────────────────
 
 async def is_subscribed(user_id: int) -> bool:
-    """Проверяет подписан ли пользователь на CHANNEL_ID."""
     try:
         member = await bot.get_chat_member(CHANNEL_ID, user_id)
         return member.status in ("member", "administrator", "creator")
@@ -138,13 +138,12 @@ def cancel_keyboard():
     return kb
 
 def subscribe_keyboard(referrer_id: int) -> InlineKeyboardMarkup:
-    """Кнопки для нового реферала — подписаться и проверить."""
     kb = InlineKeyboardMarkup(row_width=1)
     kb.add(InlineKeyboardButton("📢 Подписаться на канал", url=CHANNEL_URL))
     kb.add(InlineKeyboardButton("✅ Я подписался", callback_data=f"check_sub_{referrer_id}"))
     return kb
 
-# ─── /start с поддержкой реферального кода ───────────────────────────────────
+# ─── /start ──────────────────────────────────────────────────────────────────
 
 @dp.message_handler(commands=["start"])
 async def start(message: types.Message):
@@ -156,7 +155,6 @@ async def start(message: types.Message):
     if args and args.startswith("ref_"):
         ref_code = args[4:]
         already_referred = await is_referred(user_id)
-
         if not already_referred:
             referrer = await get_user_by_ref_code(ref_code)
             if referrer and referrer['user_id'] != user_id:
@@ -164,14 +162,11 @@ async def start(message: types.Message):
 
     await create_user(user_id, referred_by=referrer_id)
 
-    # Если пришёл по реферальной ссылке — просим подписаться на канал
     if referrer_id:
         subscribed = await is_subscribed(user_id)
         if subscribed:
-            # Уже подписан — сразу выдаём бонус рефереру
             await give_referral_bonus(referrer_id, user_id)
         else:
-            # Просим подписаться
             await message.answer(
                 f"👋 Привет, {message.from_user.first_name}!\n\n"
                 f"Вы перешли по реферальной ссылке.\n\n"
@@ -179,7 +174,6 @@ async def start(message: types.Message):
                 f"подпишитесь на наш канал:",
                 reply_markup=subscribe_keyboard(referrer_id)
             )
-            # Даём доступ к боту независимо от подписки
             await message.answer(
                 "Добро пожаловать в магазин прокси!\n"
                 "Выберите действие в меню ниже:",
@@ -195,7 +189,6 @@ async def start(message: types.Message):
     )
 
 async def give_referral_bonus(referrer_id: int, new_user_id: int):
-    """Начисляет бонус рефереру."""
     await add_balance(referrer_id, REFERRAL_BONUS)
     try:
         await bot.send_message(
@@ -205,9 +198,6 @@ async def give_referral_bonus(referrer_id: int, new_user_id: int):
         )
     except Exception:
         pass
-    print(f"✅ Реферальный бонус {REFERRAL_BONUS} ₽ начислен {referrer_id} за {new_user_id}")
-
-# ─── Callback: проверка подписки после нажатия "Я подписался" ────────────────
 
 @dp.callback_query_handler(lambda c: c.data.startswith("check_sub_"))
 async def check_subscription(call: types.CallbackQuery):
@@ -215,24 +205,17 @@ async def check_subscription(call: types.CallbackQuery):
     referrer_id = int(call.data.split("_")[2])
 
     subscribed = await is_subscribed(user_id)
-
     if subscribed:
-        # Проверяем что бонус ещё не был выдан
-        user = await get_user(referrer_id)
-        already_referred = await is_referred(user_id)
-
-        # Выдаём бонус только если реферал действительно записан к этому рефереру
         user_data = await get_user(user_id)
         if user_data and user_data.get('referred_by') == referrer_id:
             await give_referral_bonus(referrer_id, user_id)
-            await call.message.edit_reply_markup()  # убираем кнопки
+            await call.message.edit_reply_markup()
             await call.answer("✅ Спасибо за подписку! Ваш друг получил бонус.", show_alert=True)
         else:
             await call.answer("✅ Подписка подтверждена!", show_alert=True)
     else:
         await call.answer(
-            "❌ Вы ещё не подписались на канал!\n\n"
-            "Подпишитесь и нажмите кнопку снова.",
+            "❌ Вы ещё не подписались!\n\nПодпишитесь на канал и нажмите кнопку снова.",
             show_alert=True
         )
 
@@ -401,10 +384,12 @@ async def profile_menu(message: types.Message):
     user = await get_user(user_id)
     balance = user['balance'] if user else 0
     country = user['country'] if user else None
-    ref_code = user['referral_code'] if user else None
+
+    # ensure_ref_code генерирует и сохраняет код если его нет
+    ref_code = await ensure_ref_code(user_id)
 
     bot_info = await bot.get_me()
-    ref_link = f"https://t.me/{bot_info.username}?start=ref_{ref_code}" if ref_code else "недоступна"
+    ref_link = f"https://t.me/{bot_info.username}?start=ref_{ref_code}"
 
     text = f"👤 <b>Ваш профиль:</b>\n\n"
     text += f"💰 Баланс: <b>{balance} руб.</b>\n"
@@ -692,7 +677,7 @@ async def do_broadcast(message: types.Message, text: str):
 async def on_startup(dp):
     print("🔄 Инициализация БД...")
     await init_db()
-    print(f"✅ Бот готов | Канал для рефералов: {CHANNEL_ID}")
+    print(f"✅ Бот готов | Реферальный канал: {CHANNEL_ID}")
 
 if __name__ == "__main__":
     print("=" * 50)
