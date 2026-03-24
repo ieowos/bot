@@ -20,7 +20,7 @@ print(f"🐍 Python: {sys.version}")
 from env import (
     BOT_TOKEN, PAYMENTS_TOKEN,
     MTProto_FINLAND, MTProto_GERMANY, MTProto_NETHERLANDS,
-    SOCKS5_GERMANY,
+    SOCKS5_GERMANY, SOCKS5_FINLAND,
     PAYMENT_PAGE_URL, CHANNEL_URL, SUPPORT_USERNAME,
     ADMIN_ID, DATABASE_URL,
 )
@@ -55,6 +55,7 @@ PRICES_RUB = {
     "germany":        40,
     "netherlands":    25,
     "germany_socks5": 80,
+    "finland_socks5": 70,
 }
 
 PRICES_STARS = {
@@ -62,6 +63,7 @@ PRICES_STARS = {
     "germany":        25,
     "netherlands":    15,
     "germany_socks5": 60,
+    "finland_socks5": 50,
 }
 
 COUNTRY_NAMES = {
@@ -69,6 +71,7 @@ COUNTRY_NAMES = {
     "germany":        "🇩🇪 Германия",
     "netherlands":    "🇳🇱 Нидерланды",
     "germany_socks5": "🇩🇪 Германия SOCKS5",
+    "finland_socks5": "🇫🇮 Финляндия SOCKS5",
 }
 
 PROXY_LINKS = {
@@ -76,6 +79,7 @@ PROXY_LINKS = {
     "germany":        MTProto_GERMANY,
     "netherlands":    MTProto_NETHERLANDS,
     "germany_socks5": SOCKS5_GERMANY,
+    "finland_socks5": SOCKS5_FINLAND,
 }
 
 AGREEMENT_TEXT = """📄 ПОЛЬЗОВАТЕЛЬСКОЕ СОГЛАШЕНИЕ
@@ -287,15 +291,19 @@ async def deposit_got_screenshot(message: types.Message, state: FSMContext):
     data = await state.get_data()
     amount = data.get("expected_amount", 0)
 
+    checking_msg = await message.answer("🔍 Проверяем чек...")
+    await asyncio.sleep(5)
+
     await add_balance(user_id, amount)
     new_balance = await get_balance(user_id)
     await state.finish()
 
-    await message.answer(
+    await bot.edit_message_text(
         f"✅ <b>Оплата принята!</b>\n\n"
         f"💰 Зачислено: <b>{amount} ₽</b>\n"
         f"💳 Новый баланс: <b>{new_balance} ₽</b>",
-        reply_markup=get_main_keyboard()
+        chat_id=user_id,
+        message_id=checking_msg.message_id
     )
 
     username = f"@{message.from_user.username}" if message.from_user.username else "нет"
