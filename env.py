@@ -7,8 +7,9 @@ MTProto_FINLAND     = os.getenv('MTProto_FINLAND',     "https://t.me/proxy?serve
 MTProto_GERMANY     = os.getenv('MTProto_GERMANY',     "https://t.me/proxy?server=132.243.194.145&port=443&secret=7ihMpMFZUXIbc%2BDmuL7TAIV3d3cuZ29vZ2xlLmNvbQ")
 MTProto_NETHERLANDS = os.getenv('MTProto_NETHERLANDS', "https://t.me/socks?server=163.198.214.115&port=8000&user=rwL6ay&pass=zZgoy5")
 
-# ⬇️ Замени на реальную ссылку SOCKS5 Германия
 SOCKS5_GERMANY      = os.getenv('SOCKS5_GERMANY',      "socks://cm9vdDp3UWt5TWsyUDROTWQ1QDEzMi4yNDMuMTk0LjIzMjoxMDgw#")
+SOCKS5_FINLAND      = os.getenv('SOCKS5_FINLAND',      "socks://cm9vdDptSGZoQld3UWU4V25yQDIxMi4yMi44Mi4yNjoxMDgw#Finland")
+SOCKS5_FINLAND      = os.getenv('SOCKS5_FINLAND',      "socks://cm9vdDptSGZoQld3UWU4V25yQDIxMi4yMi44Mi4yNjoxMDgw#Finland")
 
 YOOKASSA_SHOP_ID    = os.getenv('YOOKASSA_SHOP_ID',    "1301126")
 YOOKASSA_SECRET_KEY = os.getenv('YOOKASSA_SECRET_KEY', "live_BkOUCoM8deMi-q8ZoGsSMUkWGGR3sxmgr0-fjuSMYJM")
