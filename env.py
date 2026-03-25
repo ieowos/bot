@@ -7,7 +7,7 @@ MTProto_FINLAND     = os.getenv('MTProto_FINLAND',     "https://t.me/proxy?serve
 MTProto_GERMANY     = os.getenv('MTProto_GERMANY',     "https://t.me/proxy?server=132.243.194.145&port=443&secret=7ihMpMFZUXIbc%2BDmuL7TAIV3d3cuZ29vZ2xlLmNvbQ")
 MTProto_NETHERLANDS = os.getenv('MTProto_NETHERLANDS', "https://t.me/socks?server=163.198.214.115&port=8000&user=rwL6ay&pass=zZgoy5")
 
-SOCKS5_GERMANY      = os.getenv('SOCKS5_GERMANY',      "socks://cm9vdDp3UWt5TWsyUDROTWQ1QDEzMi4yNDMuMTk0LjIzMjoxMDgw#")
+SOCKS5_GERMANY      = os.getenv('SOCKS5_GERMANY',      "socks://cm9vdDpmaW5sYW5kUk9PVDE1QDE2My41LjE4MC43NToxMDgw#FINLAND")
 SOCKS5_FINLAND      = os.getenv('SOCKS5_FINLAND',      "socks://cm9vdDpmaW5sYW5kUk9PVDE1QDE2My41LjE4MC43NToxMDgw#Finland")
 SOCKS5_NETHERLANDS  = os.getenv('SOCKS5_NETHERLANDS',  "socks://emlzc3VqaXRoOkd4NGlhcWlpTFVANDUuMTUzLjE2My43NDo1MDEwMQ==#Niderlands")
 SOCKS5_USA          = os.getenv('SOCKS5_USA',          "socks://YXJnZW50b2FsaW5hOkF0M2dGdU5mUHN3MUAyMTYuMTg1LjQ2LjE4ODo1MDEwMQ==#USA")
