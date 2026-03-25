@@ -20,7 +20,7 @@ print(f"🐍 Python: {sys.version}")
 from env import (
     BOT_TOKEN, PAYMENTS_TOKEN,
     MTProto_FINLAND, MTProto_GERMANY, MTProto_NETHERLANDS,
-    SOCKS5_GERMANY, SOCKS5_FINLAND,
+    SOCKS5_GERMANY, SOCKS5_FINLAND, SOCKS5_NETHERLANDS, SOCKS5_USA,
     PAYMENT_PAGE_URL, CHANNEL_URL, SUPPORT_USERNAME,
     ADMIN_ID, DATABASE_URL,
 )
@@ -56,6 +56,8 @@ PRICES_RUB = {
     "netherlands":    25,
     "germany_socks5": 80,
     "finland_socks5": 70,
+    "netherlands_socks5": 60,
+    "usa_socks5": 65,
 }
 
 PRICES_STARS = {
@@ -64,6 +66,8 @@ PRICES_STARS = {
     "netherlands":    15,
     "germany_socks5": 60,
     "finland_socks5": 50,
+    "netherlands_socks5": 50,
+    "usa_socks5": 55,
 }
 
 COUNTRY_NAMES = {
@@ -72,6 +76,8 @@ COUNTRY_NAMES = {
     "netherlands":    "🇳🇱 Нидерланды",
     "germany_socks5": "🇩🇪 Германия SOCKS5",
     "finland_socks5": "🇫🇮 Финляндия SOCKS5",
+    "netherlands_socks5": "🇳🇱 Нидерланды SOCKS5",
+    "usa_socks5": "🇺🇸 США SOCKS5",
 }
 
 PROXY_LINKS = {
@@ -80,6 +86,8 @@ PROXY_LINKS = {
     "netherlands":    MTProto_NETHERLANDS,
     "germany_socks5": SOCKS5_GERMANY,
     "finland_socks5": SOCKS5_FINLAND,
+    "netherlands_socks5": SOCKS5_NETHERLANDS,
+    "usa_socks5": SOCKS5_USA,
 }
 
 AGREEMENT_TEXT = """📄 ПОЛЬЗОВАТЕЛЬСКОЕ СОГЛАШЕНИЕ
